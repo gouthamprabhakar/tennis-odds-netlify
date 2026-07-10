@@ -1,87 +1,78 @@
-# Tennis Odds Alert — Netlify Scheduled Function
+# Tennis / Multi-Sport Odds Watchlist — Netlify
 
-Checks tennis odds every 30 minutes and emails you when your condition is
-met. Runs entirely on Netlify — no computer needs to stay on.
+Tracks multiple matches across multiple sports at once (tennis, soccer,
+cricket, whatever The Odds API covers), and emails you when a condition is
+met. **Adding/removing things you watch never requires a redeploy** — you
+manage the watchlist through a simple web page.
 
-## 1. Get your API keys
+## One-time setup
 
-**The Odds API** (odds data, free tier)
-- Sign up at https://the-odds-api.com
-- Copy your API key
+### 1. API keys (only set these once)
 
-**Gmail app password** (sends the email — free, no new signup)
-- Go to https://myaccount.google.com/apppasswords (you'll need 2-Step
-  Verification turned on for your Google account first)
-- Create an app password for "Mail"
-- Copy the 16-character password it gives you — that's what goes in
-  `GMAIL_APP_PASSWORD` below, NOT your normal Gmail password
+**The Odds API** — https://the-odds-api.com — copy your key.
 
-Tip: if you want a text instead of an email, put your carrier's
-email-to-SMS gateway address in `ALERT_EMAIL_TO` instead of a real email —
-e.g. `1234567890@vtext.com` for Verizon, `1234567890@txt.att.net` for AT&T,
-`1234567890@tmomail.net` for T-Mobile.
+**Gmail app password** — https://myaccount.google.com/apppasswords (needs
+2-Step Verification on first). Copy the 16-character password.
 
-## 2. Push this folder to GitHub
+### 2. Push to GitHub, connect to Netlify
 
+Same as before:
 ```bash
-cd tennis-odds-netlify
-git init
 git add .
-git commit -m "Tennis odds alert"
+git commit -m "Multi-sport watchlist"
+git push
 ```
-Create a new repo on GitHub and push it there.
-
-## 3. Connect to Netlify
-
-1. Go to https://app.netlify.com -> "Add new site" -> "Import an existing project"
-2. Pick the GitHub repo you just pushed
-3. Build settings: leave build command blank, publish directory blank (this
-   site is functions-only) — just click Deploy
-
-## 4. Add environment variables
-
-In Netlify: **Site settings -> Environment variables**, add:
+Then in Netlify: **Site configuration → Environment variables**, set just these
+(no per-match variables anymore):
 
 | Key | Value |
 |---|---|
 | `ODDS_API_KEY` | your Odds API key |
-| `SPORT_KEY` | e.g. `tennis_atp_wimbledon` |
-| `PLAYER_NAME` | exact name as it appears in the API, e.g. `Novak Djokovic` |
-| `DIRECTION` | `above` or `below` |
-| `THRESHOLD` | e.g. `1.50` |
-| `GMAIL_ADDRESS` | the Gmail account sending the alert |
-| `GMAIL_APP_PASSWORD` | the 16-character app password (not your real password) |
-| `ALERT_EMAIL_TO` | where the alert goes — a normal email, or a carrier gateway (see tip above) for a text |
+| `GMAIL_ADDRESS` | your Gmail address |
+| `GMAIL_APP_PASSWORD` | the 16-char app password |
+| `ALERT_EMAIL_TO` | where alerts should go |
 
-Then trigger a redeploy (Deploys -> Trigger deploy) so the function picks
-up the new env vars.
+Redeploy once (**Deploys -> Trigger deploy**) to apply these.
 
-## 5. Enable Netlify Blobs
+## Managing what you're watching (no redeploy needed)
 
-Blobs is on by default for sites on Netlify's current runtime — no extra
-setup needed. It's what the function uses to remember "already alerted"
-so it doesn't text you every 30 minutes once triggered.
+Go to your site's URL (e.g. `https://your-site-name.netlify.app`) - you'll
+see a page listing everything currently watched, and a form to add more.
 
-## 6. Confirm it's running
+Fields when adding an item:
+- **Sport key** - e.g. `tennis_atp_wimbledon`, `soccer_epl`. Full list:
+  https://the-odds-api.com/sports-odds-data/sports-apis.html
+- **Player/team name** - exact spelling as the API returns it. Check by
+  visiting the raw endpoint in your browser:
+  `https://api.the-odds-api.com/v4/sports/SPORT_KEY/odds?apiKey=YOUR_KEY&regions=us&markets=h2h&oddsFormat=american`
+- **Direction / Threshold** - same as before: `above` fires when price
+  rises past threshold, `below` fires when it drops past it.
+- **Bookmaker** - defaults to `bovada`.
+- **Step size** - after the first alert, you'll get another alert every
+  time the price moves this many points further in your favor (default 50).
 
-Site -> Functions tab -> you should see `tennis-odds-check` listed with
-a schedule of `*/30 * * * *`. Click it to see logs after each run.
+Changes save instantly to Netlify Blobs and are picked up on the next
+scheduled run - no code, no env vars, no redeploy.
 
-## Adjusting the schedule
+## How it checks efficiently
 
-Edit the `schedule` value in `netlify/functions/tennis-odds-check.mjs`:
-- `*/30 * * * *` = every 30 min
-- `*/15 * * * *` = every 15 min
-- `0 * * * *` = every hour
+If you're watching multiple players/matches within the *same* sport (e.g.
+two different tennis matches), the function only calls the Odds API once
+for that sport per run, not once per item - saving your API quota.
 
-Cron minimum granularity on Netlify is 1 minute, but be mindful of your
-Odds API request quota on the free tier.
+## Schedule
 
-## Finding the right SPORT_KEY and PLAYER_NAME
+Set in `netlify/functions/odds-check.mjs`:
+```javascript
+export const config = {
+  schedule: "*/2 * * * *",  // every 2 minutes
+};
+```
+Be mindful of your Odds API plan's request limit - total daily API calls
+depend on how many *distinct sports* you're watching (not how many
+players), since same-sport items share one call per run.
 
-Full list of tennis tournament keys:
-https://the-odds-api.com/sports-odds-data/tennis-odds.html
+## Checking logs
 
-Player names must match exactly what the API returns. If unsure, temporarily
-set `THRESHOLD` to something absurd (e.g. `99`) and check the function logs —
-they print the odds and player names found.
+Netlify -> Functions tab -> odds-check -> view recent invocation logs.
+Each run logs a line per watched item (price found, alert sent, or error).

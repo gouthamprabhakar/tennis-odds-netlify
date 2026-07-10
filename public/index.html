@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Odds Watchlist</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 640px; margin: 20px auto; padding: 0 16px; background: #f7f7f8; }
+  h1 { font-size: 20px; }
+  .card { background: white; border-radius: 10px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  label { display: block; font-size: 13px; color: #555; margin-top: 10px; }
+  input, select { width: 100%; padding: 8px; margin-top: 4px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; font-size: 14px; }
+  button { margin-top: 14px; padding: 10px 16px; background: #1a73e8; color: white; border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  button.remove { background: #d93025; padding: 6px 10px; font-size: 12px; }
+  .item { border-bottom: 1px solid #eee; padding: 10px 0; display: flex; justify-content: space-between; align-items: center; }
+  .item:last-child { border-bottom: none; }
+  .item div.details { font-size: 13px; line-height: 1.4; }
+  .item div.details b { font-size: 14px; }
+  #status { font-size: 13px; margin-top: 10px; color: #1a7f37; }
+</style>
+</head>
+<body>
+
+<h1>Odds Watchlist</h1>
+
+<div class="card">
+  <b>Fast mode</b>
+  <div id="fastModeStatus" style="font-size:13px; margin-top:6px; color:#555;">Loading...</div>
+  <div style="margin-top:10px;">
+    <button onclick="enableFastMode()">Enable for 2 hours</button>
+    <button onclick="disableFastMode()" style="background:#666; margin-left:8px;">Disable now</button>
+  </div>
+  <div style="font-size:12px; color:#888; margin-top:8px;">
+    Normally checks every ~10 minutes to save API quota. Fast mode checks every
+    minute for the duration you set — use this right before/during a live match.
+  </div>
+</div>
+
+<div class="card">
+  <div id="list">Loading...</div>
+</div>
+
+<div class="card">
+  <b>Add new item</b>
+
+  <label>Sport key (e.g. tennis_atp_wimbledon, soccer_epl)</label>
+  <input id="sportKey" placeholder="tennis_atp_wimbledon" />
+
+  <label>Player / team name (exact spelling as API returns)</label>
+  <input id="playerName" placeholder="Alexander Zverev" />
+
+  <label>Direction</label>
+  <select id="direction">
+    <option value="above">Above</option>
+    <option value="below">Below</option>
+  </select>
+
+  <label>Threshold</label>
+  <input id="threshold" type="number" step="any" placeholder="-500" />
+
+  <label>Bookmaker (default: bovada)</label>
+  <input id="bookmaker" placeholder="bovada" />
+
+  <label>Alert again every this many points of movement (default: 50)</label>
+  <input id="stepSize" type="number" placeholder="50" />
+
+  <button onclick="addItem()">Add to watchlist</button>
+  <div id="status"></div>
+</div>
+
+<script>
+async function loadFastModeStatus() {
+  const res = await fetch('/.netlify/functions/get-fast-mode');
+  const data = await res.json();
+  const el = document.getElementById('fastModeStatus');
+  if (data.active) {
+    const mins = Math.round((data.until - Date.now()) / 60000);
+    el.textContent = `Active — checking every minute for another ~${mins} min.`;
+    el.style.color = '#1a7f37';
+  } else {
+    el.textContent = 'Off — checking every ~10 minutes.';
+    el.style.color = '#555';
+  }
+}
+
+async function enableFastMode() {
+  await fetch('/.netlify/functions/set-fast-mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enable: true, minutes: 120 }),
+  });
+  loadFastModeStatus();
+}
+
+async function disableFastMode() {
+  await fetch('/.netlify/functions/set-fast-mode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enable: false }),
+  });
+  loadFastModeStatus();
+}
+
+async function loadList() {
+  const res = await fetch('/.netlify/functions/get-watchlist');
+  const list = await res.json();
+  const container = document.getElementById('list');
+
+  if (list.length === 0) {
+    container.innerHTML = '<i>No items yet. Add one below.</i>';
+    return;
+  }
+
+  container.innerHTML = list.map((item, i) => `
+    <div class="item">
+      <div class="details">
+        <b>${item.playerName}</b> — ${item.sportKey}<br/>
+        Alert when ${item.direction} ${item.threshold} (book: ${item.bookmaker || 'bovada'}, step: ${item.stepSize || 50})
+      </div>
+      <button class="remove" onclick="removeItem(${i})">Remove</button>
+    </div>
+  `).join('');
+}
+
+async function getCurrentList() {
+  const res = await fetch('/.netlify/functions/get-watchlist');
+  return res.json();
+}
+
+async function saveList(list) {
+  const res = await fetch('/.netlify/functions/update-watchlist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(list),
+  });
+  return res.json();
+}
+
+async function addItem() {
+  const sportKey = document.getElementById('sportKey').value.trim();
+  const playerName = document.getElementById('playerName').value.trim();
+  const direction = document.getElementById('direction').value;
+  const threshold = parseFloat(document.getElementById('threshold').value);
+  const bookmaker = document.getElementById('bookmaker').value.trim() || 'bovada';
+  const stepSize = parseFloat(document.getElementById('stepSize').value) || 50;
+
+  if (!sportKey || !playerName || isNaN(threshold)) {
+    document.getElementById('status').textContent = 'Fill in sport, player, and threshold.';
+    return;
+  }
+
+  const id = `${sportKey}-${playerName}-${Date.now()}`.replace(/\s+/g, '_');
+  const newItem = { id, sportKey, playerName, direction, threshold, bookmaker, stepSize };
+
+  const current = await getCurrentList();
+  current.push(newItem);
+  await saveList(current);
+
+  document.getElementById('status').textContent = 'Added! It will be checked on the next scheduled run.';
+  document.getElementById('sportKey').value = '';
+  document.getElementById('playerName').value = '';
+  document.getElementById('threshold').value = '';
+  loadList();
+}
+
+async function removeItem(index) {
+  const current = await getCurrentList();
+  current.splice(index, 1);
+  await saveList(current);
+  loadList();
+}
+
+loadList();
+loadFastModeStatus();
+</script>
+
+</body>
+</html>
