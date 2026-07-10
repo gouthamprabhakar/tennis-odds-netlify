@@ -23,7 +23,7 @@ const STEP_SIZE = parseFloat(process.env.STEP_SIZE || "50"); // alert again ever
 
 // Runs every N minutes. Cron syntax: min hour day month weekday
 export const config = {
-  schedule: "*/1 * * * *",
+  schedule: "*/45 * * * *",
 };
 
 async function getOdds() {
