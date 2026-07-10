@@ -1,9 +1,10 @@
 // netlify/functions/tennis-odds-check.mjs
 //
 // Runs automatically on a schedule (set below) via Netlify Scheduled Functions.
-// Checks tennis odds from The Odds API, and texts you via Twilio if your
-// condition is met. Uses Netlify Blobs to remember whether it already alerted,
-// so it won't text you every single run once triggered.
+// Checks tennis odds from The Odds API, and emails you via Gmail when your
+// condition is met. Uses Netlify Blobs to track the last price it alerted on,
+// so it can send a running trail of updates as odds move in your favor,
+// rather than a single one-time alert.
 
 import { getStore } from "@netlify/blobs";
 import nodemailer from "nodemailer";
@@ -18,10 +19,11 @@ const PLAYER_NAME = process.env.PLAYER_NAME || "Novak Djokovic";
 const DIRECTION = process.env.DIRECTION || "above"; // "above" or "below"
 const THRESHOLD = parseFloat(process.env.THRESHOLD || "1.50");
 const BOOKMAKER = process.env.BOOKMAKER || "bovada"; // matches the "key" field, e.g. bovada, fanduel, draftkings, betmgm
+const STEP_SIZE = parseFloat(process.env.STEP_SIZE || "50"); // alert again every time price moves this much further in your favor
 
-// Runs every 30 minutes. Cron syntax: min hour day month weekday
+// Runs every N minutes. Cron syntax: min hour day month weekday
 export const config = {
-  schedule: "*/1 * * * *",
+  schedule: "*/30 * * * *",
 };
 
 async function getOdds() {
@@ -76,7 +78,7 @@ async function sendEmail(subject, message) {
 
 export default async (req) => {
   const store = getStore("tennis-alerts");
-  const alertKey = `alerted:${SPORT_KEY}:${PLAYER_NAME}`;
+  const stateKey = `laststate:${SPORT_KEY}:${PLAYER_NAME}:${DIRECTION}`;
 
   try {
     const matches = await getOdds();
@@ -89,22 +91,40 @@ export default async (req) => {
 
     console.log(`${PLAYER_NAME} odds: ${price}`);
 
-    const alreadyAlerted = (await store.get(alertKey)) === "true";
+    // lastAlertedPrice is null until the very first alert fires.
+    let lastAlertedPrice = await store.get(stateKey).catch(() => null);
+    lastAlertedPrice = lastAlertedPrice ? parseFloat(lastAlertedPrice) : null;
 
-    if (conditionMet(price) && !alreadyAlerted) {
-      const message = `${PLAYER_NAME} odds are now ${price} (${DIRECTION} ${THRESHOLD})`;
+    const hasCrossedInitialThreshold = conditionMet(price);
+    if (!hasCrossedInitialThreshold) {
+      return new Response(`checked, price=${price}, not past initial threshold yet`);
+    }
+
+    // First time crossing the threshold at all -> always alert.
+    if (lastAlertedPrice === null) {
+      const message = `${PLAYER_NAME} odds just crossed your threshold: now ${price} (${DIRECTION} ${THRESHOLD})`;
       await sendEmail(`Tennis odds alert: ${PLAYER_NAME}`, message);
-      await store.set(alertKey, "true");
-      console.log("Alert sent.");
-      return new Response("alert sent");
+      await store.set(stateKey, String(price));
+      console.log("Initial alert sent.");
+      return new Response("initial alert sent");
     }
 
-    if (!conditionMet(price) && alreadyAlerted) {
-      // Odds moved back — reset so a future crossing can alert again.
-      await store.set(alertKey, "false");
+    // After that, alert again only once price has moved another STEP_SIZE further
+    // in the direction you care about, so you get a running trail of updates.
+    const movedEnough =
+      DIRECTION === "above"
+        ? price >= lastAlertedPrice + STEP_SIZE
+        : price <= lastAlertedPrice - STEP_SIZE;
+
+    if (movedEnough) {
+      const message = `${PLAYER_NAME} odds moved further: now ${price} (was ${lastAlertedPrice})`;
+      await sendEmail(`Tennis odds update: ${PLAYER_NAME}`, message);
+      await store.set(stateKey, String(price));
+      console.log("Follow-up alert sent.");
+      return new Response("follow-up alert sent");
     }
 
-    return new Response(`checked, price=${price}, no alert`);
+    return new Response(`checked, price=${price}, no significant move yet`);
   } catch (err) {
     console.error(err);
     return new Response(`error: ${err.message}`, { status: 500 });
